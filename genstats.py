@@ -6,7 +6,7 @@ import sys
 
 #Connect to local mongoDB
 
-connection_string = "mongodb://"+sys.argv[1]+":27017"
+connection_string = "mongodb://"+sys.argv[1]
 #print connection_string
 connection = pymongo.MongoClient(connection_string)
 database = connection.testresults
