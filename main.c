@@ -13,6 +13,7 @@
 #include "launchargs.h"
 #include <string.h>
 #include <math.h>
+
 #define CFG_DB "testsrv"
 #define CFG_COLLECTION "tests"
 #define DATA_DB "testsrv"
@@ -24,6 +25,7 @@
 #define SEQUENCE_COLL "data"
 #define SEQUENCE_BATCH 10000
 #define DEFAULT_URI "localhost:27017"
+#define DEFAULT_TESTID "loadtest"
 
 
 int total_threads = 2;
@@ -102,13 +104,12 @@ int main(int argc, char **argv) {
 	mongoc_client_t *conn;
 
 	if (parse_command_line(&launchargs, argc, argv) != 0) {
-		fprintf(stderr, "Exiting with Error");
-		exit(1);
+		fprintf(stderr, "Try '%s --help' for more information.\n", argv[0]);
+		exit(2);
 	}
 
 	if (connect_to_mongo(hosts[0], &conn) != 0) {
-		fprintf(stderr,
-				"Unable to connect to test configuration server %s \n",
+		fprintf(stderr, "Unable to connect to test configuration server %s \n",
 				hosts[0]);
 		return -1;
 	}
@@ -122,7 +123,7 @@ int main(int argc, char **argv) {
 
 
 	for (x = 0; x < total_threads; x++) {
-	        srand48(x); // Predictable behaviour, but different for each process
+		srand48(x); // Predictable behaviour, but different for each process
 		if (total_threads == 1 || fork() == 0) {
 			run_load(&launchargs, &testparams,x);
 			exit(0);
@@ -203,7 +204,7 @@ static int fetch_test_params(	mongoc_client_t *conn, MLaunchargs *launchargs, MT
 
 	bson_t *query;
 	const bson_t *testdetail;
-	//I AM HERE
+
 	query = BCON_NEW ( "_id", BCON_UTF8((const char*)launchargs->testid) );
 
 	collection = mongoc_client_get_collection(conn, CFG_DB, CFG_COLLECTION);
@@ -213,12 +214,7 @@ static int fetch_test_params(	mongoc_client_t *conn, MLaunchargs *launchargs, MT
 			query, NULL, NULL);
 
 
-;
 	if (mongoc_cursor_next(cursor, &testdetail)) {
-
-
-
-
 		testparams->numfields = get_bson_int(testdetail, "numfields");
 		testparams->fieldsize = get_bson_int(testdetail, "fieldsize");
 		testparams->inserts = get_bson_int(testdetail, "inserts");
@@ -244,13 +240,33 @@ static int fetch_test_params(	mongoc_client_t *conn, MLaunchargs *launchargs, MT
 	mongoc_cursor_destroy(cursor);
 	bson_destroy(query);
 
-
 	return 0;
+}
+
+static void usage(char *commandname) {
+	fprintf(stderr, "Usage: %s [-dprth]\n\n", commandname);
+
+        fprintf(stderr, "Generates a load on one or more MongoDB hosts, based on test parameters"
+			" in collection '%s.%s'.\n", CFG_DB, CFG_COLLECTION);
+        fprintf(stderr, "using collection '%s.%s' for data and '%s.%s' for stats.\n\n",
+			DATA_DB, DATA_COLLECTION, STATS_DB, STATS_COLLECTION);
+
+	fprintf(stderr, "  -d duration  Time to run the test in seconds (%i sec)\n",
+		test_duration);
+        fprintf(stderr, "  -p threads   Number of thread to run in parallel (%i)\n",
+		total_threads);
+	fprintf(stderr, "  -r rate      Generate events using Poisson distribution (%i ops/sec)\n",
+		op_rate);
+	fprintf(stderr, "  -t test_id   Id to retrieve parameters and save stats with (%s)\n",
+		DEFAULT_TESTID);
+	fprintf(stderr, "  -h hostlist  Add hosts to generate load on (%s)\n", DEFAULT_URI);
+
+	exit(0);
 }
 
 static int parse_command_line(MLaunchargs *launchargs, int argc, char **argv) {
 	static char localhost[] = DEFAULT_URI;
-	static char testid[] = "loadtest";
+	static char testid[] = DEFAULT_TESTID;
 
 	opterr = 0;
 	int c;
@@ -260,7 +276,7 @@ static int parse_command_line(MLaunchargs *launchargs, int argc, char **argv) {
 	launchargs->uri = localhost;
 	launchargs->testid = testid;
 
-	while ((c = getopt(argc, argv, "d:p:r:t:h:")) != -1)
+	while ((c = getopt(argc, argv, "d:p:r:t:h:-:")) != -1)
 		switch (c) {
 		case 'd':
 			test_duration = atoi(optarg);
@@ -278,20 +294,25 @@ static int parse_command_line(MLaunchargs *launchargs, int argc, char **argv) {
 			hostlist = (char*)strdup(optarg);
 			hosts[nhosts-1] = strtok(hostlist,",");
 			printf("Host %d set to [%s]\n",nhosts,hosts[nhosts-1]);
-			while((hostname = strtok(NULL,",")) != NULL) {
+			while((hostname = strtok(NULL,",")) != NULL && nhosts < sizeof(hosts)) {
 				nhosts++;
 				hosts[nhosts-1] = hostname;
 				printf("Host %d set to [%s]\n",nhosts,hosts[nhosts-1]);
 			}
 			launchargs->uri = optarg;
 			break;
+		case '-':
+			if (!strcmp(optarg, "help"))
+				usage(argv[0]);
+			fprintf(stderr, "Unknown option '--%s'.\n", optarg);
+			return 1;
 		case '?':
 			if (optopt == 'h')
 				fprintf(stderr, "Option -%c requires an argument.\n", optopt);
 			else if (isprint(optopt))
-				fprintf(stderr, "Unknown option `-%c'.\n", optopt);
+				fprintf(stderr, "Unknown option '-%c'.\n", optopt);
 			else
-				fprintf(stderr, "Unknown option character `\\x%x'.\n", optopt);
+				fprintf(stderr, "Unknown option character '\\x%x'.\n", optopt);
 			return 1;
 		default:
 			abort();
@@ -310,8 +331,6 @@ int save_stats(mongoc_client_t *conn,MLaunchargs *launchargs, bson_oid_t *thread
 	bson_t record;
 	bson_error_t error;
 
-
-
 	bson_init(&record);
 	bson_t child;
 	bson_t time_array;
@@ -324,7 +343,6 @@ int save_stats(mongoc_client_t *conn,MLaunchargs *launchargs, bson_oid_t *thread
 	append_op_stats(&record,"insert",&stats->inserts);
 	append_op_stats(&record,"updates",&stats->updates);
 	append_op_stats(&record,"queries",&stats->queries);
-
 
 	collection = mongoc_client_get_collection(conn, STATS_DB,
 						STATS_COLLECTION);
@@ -417,7 +435,7 @@ int run_load(MLaunchargs *launchargs, MTestparams *testparams, int subprocid) {
 		fprintf(stderr,
 				"Unable to connect to test configuration server %s \n",
 				hosts[subprocid % nhosts]);
-		return -1;
+		return 1;
 	}
 
 
